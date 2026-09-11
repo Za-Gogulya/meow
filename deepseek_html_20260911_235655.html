@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ежедневный рандомайзер</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #f4f6f8;
+      color: #1f2937;
+      display: flex;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .app {
+      width: 100%;
+      max-width: 680px;
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.08);
+    }
+    h1 { margin: 0 0 16px; font-size: 24px; }
+
+    .meta {
+      display: flex; justify-content: space-between; gap: 12px;
+      flex-wrap: wrap; font-size: 14px; color: #4b5563;
+      margin-bottom: 16px;
+    }
+
+    .toolbar {
+      display: flex; align-items: center; gap: 12px;
+      flex-wrap: wrap; margin-bottom: 16px;
+      padding: 12px; background: #f9fafb; border-radius: 12px;
+    }
+    .toolbar-label { font-size: 14px; color: #4b5563; }
+    .palette { display: flex; gap: 8px; flex-wrap: wrap; }
+    .swatch {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 2px solid transparent; cursor: pointer;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.08);
+      transition: transform .1s, border-color .15s;
+      padding: 0;
+    }
+    .swatch:hover { transform: scale(1.1); }
+    .swatch.active { border-color: #111827; transform: scale(1.1); }
+
+    .progress-wrap {
+      height: 10px; background: #e5e7eb; border-radius: 999px;
+      overflow: hidden; margin-bottom: 6px;
+    }
+    .progress-bar {
+      height: 100%; width: 0%; background: #22c55e;
+      transition: width .25s ease;
+    }
+    .progress-text { font-size: 14px; color: #4b5563; margin-bottom: 16px; }
+
+    .list { list-style: none; padding: 0; margin: 0 0 16px; }
+    .item {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 12px 10px; border-radius: 10px;
+      cursor: pointer; user-select: none;
+      transition: background .15s;
+      border-bottom: 1px solid #eef0f3;
+    }
+    .item:last-child { border-bottom: none; }
+    .item:hover { background: #f9fafb; }
+    .item .text { flex: 1; }
+    .item.mine .text { font-weight: 600; }
+    .item.has-marks .text { color: #4b5563; }
+    .item.mine .text { color: #111827; }
+
+    .marks { display: flex; gap: 5px; flex-shrink: 0; }
+    .dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+    }
+
+    .hint { font-size: 13px; color: #6b7280; line-height: 1.5; }
+
+    .status {
+      font-size: 13px; color: #6b7280;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .status .pulse {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #22c55e; animation: pulse 2s infinite;
+    }
+    .status.err .pulse { background: #ef4444; animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: .3; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Ежедневные 10 вариантов</h1>
+
+    <div class="meta">
+      <div>День: <strong id="dayKey">—</strong></div>
+      <div>До обновления: <strong id="countdown">—</strong></div>
+    </div>
+
+    <div class="toolbar">
+      <span class="toolbar-label">Мой цвет:</span>
+      <div class="palette" id="palette"></div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div class="progress-text" id="progressText">Загрузка…</div>
+
+    <ul id="list" class="list"></ul>
+
+    <div class="status" id="status">
+      <span class="pulse"></span><span id="statusText">синхронизировано</span>
+    </div>
+
+    <p class="hint">
+      Клик по строке — поставить или снять отметку выбранным цветом.
+      Повторный клик тем же цветом снимает отметку, клик другим цветом — меняет её.
+      Отметки видны на всех устройствах.
+    </p>
+  </div>
+
+  <script>
+    // ===================== НАСТРОЙКИ =====================
+    const PALETTE = [
+      '#22c55e', // зелёный
+      '#3b82f6', // синий
+      '#f59e0b', // янтарный
+      '#ef4444', // красный
+      '#a855f7', // фиолетовый
+      '#ec4899', // розовый
+      '#14b8a6', // бирюзовый
+      '#6b7280'  // серый
+    ];
+    const POLL_MS = 3000;
+
+    // ===================== ЛОКАЛЬНЫЕ ДАННЫЕ =====================
+    function getDeviceId() {
+      let id = localStorage.getItem('deviceId');
+      if (!id) {
+        id = 'dev-' + Math.random().toString(36).slice(2, 10) +
+             Date.now().toString(36);
+        localStorage.setItem('deviceId', id);
+      }
+      return id;
+    }
+    const deviceId = getDeviceId();
+
+    let myColor = localStorage.getItem('myColor') || PALETTE[0];
+    if (!PALETTE.includes(myColor)) myColor = PALETTE[0];
+
+    // ===================== СОСТОЯНИЕ =====================
+    let state = {
+      dayKey: null,
+      items: [],
+      nextResetAt: null
+    };
+
+    // ===================== РЕНДЕР =====================
+    const listEl = document.getElementById('list');
+    const paletteEl = document.getElementById('palette');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const dayKeyEl = document.getElementById('dayKey');
+    const countdownEl = document.getElementById('countdown');
+    const statusEl = document.getElementById('status');
+    const statusTextEl = document.getElementById('statusText');
+
+    function renderPalette() {
+      paletteEl.innerHTML = '';
+      PALETTE.forEach(color => {
+        const btn = document.createElement('button');
+        btn.className = 'swatch' + (color === myColor ? ' active' : '');
+        btn.style.background = color;
+        btn.title = color;
+        btn.addEventListener('click', () => {
+          myColor = color;
+          localStorage.setItem('myColor', color);
+          renderPalette();
+        });
+        paletteEl.appendChild(btn);
+      });
+    }
+
+    function renderList() {
+      listEl.innerHTML = '';
+      state.items.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'item';
+        li.dataset.id = item.id;
+
+        const mine = item.marks.some(m => m.deviceId === deviceId);
+        if (mine) li.classList.add('mine');
+        if (item.marks.length > 0) li.classList.add('has-marks');
+
+        const span = document.createElement('span');
+        span.className = 'text';
+        span.textContent = item.text;
+
+        const marks = document.createElement('div');
+        marks.className = 'marks';
+        // сортируем точки по времени появления
+        [...item.marks]
+          .sort((a, b) => a.ts - b.ts)
+          .forEach(m => {
+            const dot = document.createElement('span');
+            dot.className = 'dot';
+            dot.style.background = m.color;
+            if (m.deviceId === deviceId) dot.title = 'ваша отметка';
+            marks.appendChild(dot);
+          });
+
+        li.appendChild(span);
+        li.appendChild(marks);
+        li.addEventListener('click', () => toggleMark(item));
+        listEl.appendChild(li);
+      });
+    }
+
+    function renderProgress() {
+      const total = state.items.length;
+      const solved = state.items.filter(i => i.marks.length > 0).length;
+      const percent = total ? (solved / total) * 100 : 0;
+      progressBar.style.width = percent + '%';
+      progressText.textContent = `Отмечено: ${solved} из ${total}`;
+    }
+
+    function renderAll() {
+      dayKeyEl.textContent = state.dayKey || '—';
+      renderList();
+      renderProgress();
+    }
+
+    // ===================== ДЕЙСТВИЯ =====================
+    async function toggleMark(item) {
+      try {
+        setStatus('синхронизация…');
+        const res = await fetch(
+          `/api/day/${encodeURIComponent(state.dayKey)}/mark`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deviceId,
+              itemId: item.id,
+              color: myColor
+            })
+          }
+        );
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        // локально обновляем только этот элемент
+        const idx = state.items.findIndex(i => i.id === data.item.id);
+        if (idx >= 0) state.items[idx] = data.item;
+        renderAll();
+        setStatus('синхронизировано');
+      } catch (e) {
+        console.error(e);
+        setStatus('ошибка синхронизации', true);
+      }
+    }
+
+    function setStatus(text, isError = false) {
+      statusTextEl.textContent = text;
+      statusEl.classList.toggle('err', isError);
+    }
+
+    // ===================== ЗАГРУЗКА / ПОЛЛИНГ =====================
+    async function fetchToday() {
+      try {
+        const res = await fetch('/api/today', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        const dayChanged = data.dayKey !== state.dayKey;
+        state.dayKey = data.dayKey;
+        state.items = data.items;
+        state.nextResetAt = data.nextResetAt;
+
+        if (dayChanged) renderAll();
+        else {
+          renderList();
+          renderProgress();
+          dayKeyEl.textContent = state.dayKey;
+        }
+        setStatus('синхронизировано');
+      } catch (e) {
+        console.error(e);
+        setStatus('нет связи с сервером', true);
+      }
+    }
+
+    // ===================== ТАЙМЕР ОБРАТНОГО ОТСЧЁТА =====================
+    function updateCountdown() {
+      if (!state.nextResetAt) return;
+      const diff = new Date(state.nextResetAt) - new Date();
+      if (diff <= 0) {
+        countdownEl.textContent = '00:00:00';
+        fetchToday();
+        return;
+      }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      countdownEl.textContent =
+        `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    }
+
+    // ===================== СТАРТ =====================
+    renderPalette();
+    fetchToday();
+    setInterval(fetchToday, POLL_MS);
+    setInterval(updateCountdown, 1000);
+  </script>
+</body>
+</html>
